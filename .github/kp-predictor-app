@@ -1,0 +1,152 @@
+import streamlit as st
+import pandas as pd
+import joblib
+
+# โหลดโมเดล
+model = joblib.load("solar_wind_predictor_model.pkl")
+
+st.set_page_config(page_title="Kp Index Predictor", layout="centered")
+st.title("🔮 พยากรณ์ค่า Kp Index จากข้อมูลลมสุริยะ")
+st.markdown("กรอกค่าที่ต้องการแล้วกดปุ่มเพื่อดูค่าพยากรณ์ Kp")
+
+# แบบฟอร์มกรอกข้อมูล
+with st.form("input_form"):
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        bz = st.number_input("Bz (nT)", value=-5.0, format="%.2f")
+    with col2:
+        speed = st.number_input("Speed (km/s)", value=400.0, format="%.2f")
+    with col3:
+        density = st.number_input("Density (N/cm³)", value=8.0, format="%.2f")
+
+    submitted = st.form_submit_button("🔍 พยากรณ์ค่า Kp")
+
+# เมื่อกดปุ่ม
+if submitted:
+    # สร้าง DataFrame จากค่าที่กรอก
+    new_data = pd.DataFrame([{"Bz": bz, "Speed": speed, "Density": density}])
+    new_data["Speed_Density_Ratio"] = new_data["Speed"] / (new_data["Density"] + 1e-6)
+    new_data["Bz_Squared"] = new_data["Bz"] ** 2
+    new_data["Energy_Flux"] = (new_data["Speed"] ** 2) * new_data["Density"]
+
+    # ทำนาย
+    prediction = model.predict(new_data)[0]
+
+    st.success(f"ค่าพยากรณ์ Kp Index คือ: {prediction:.2f}")
+
+    # แสดงระดับความเสี่ยง
+    if prediction < 10:
+        st.info("🟢 ระดับปลอดภัย")
+    elif prediction < 30:
+        st.warning("🟠 เริ่มมีความเสี่ยง")
+    else:
+        st.error("🔴 ระดับอันตรายสูง! ควรระวังผลกระทบจากพายุสุริยะ")
+
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import mean_squared_error, r2_score
+import matplotlib.pyplot as plt
+import joblib
+from google.colab import files
+
+# 📂 อัปโหลดไฟล์ CSV
+uploaded = files.upload()
+
+# 📄 โหลดข้อมูล
+df = pd.read_csv('solarwind.csv')
+print("คอลัมน์ทั้งหมด:", df.columns.tolist())
+
+# 🧹 เปลี่ยนชื่อคอลัมน์ให้เรียกง่าย
+df = df.rename(columns={
+    'BZ, nT (GSM)': 'Bz',
+    'SW Plasma Speed, km/s': 'Speed',
+    'SW Proton Density, N/cm^3': 'Density',
+    'Kp index': 'Kp'
+})
+
+# ⚙️ เพิ่มฟีเจอร์ใหม่
+df['Speed_Density_Ratio'] = df['Speed'] / (df['Density'] + 1e-6)  # ป้องกันหารศูนย์
+df['Bz_Squared'] = df['Bz'] ** 2
+df['Energy_Flux'] = (df['Speed'] ** 2) * df['Density']
+
+# 🎯 แยกฟีเจอร์กับเป้าหมาย
+feature_cols = ['Bz', 'Speed', 'Density', 'Speed_Density_Ratio', 'Bz_Squared', 'Energy_Flux']
+X = df[feature_cols]
+y = df['Kp']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 🔍 ค้นหาพารามิเตอร์ที่ดีที่สุด
+param_grid = {
+    'n_estimators': [100, 200],
+    'max_depth': [10, 20, None],
+    'min_samples_split': [2, 5]
+}
+
+grid_search = GridSearchCV(
+    RandomForestRegressor(random_state=42),
+    param_grid,
+    cv=5,
+    scoring='r2',
+    n_jobs=-1
+)
+grid_search.fit(X_train, y_train)
+
+best_model = grid_search.best_estimator_
+print("📌 Best Parameters:", grid_search.best_params_)
+
+# 🔮 พยากรณ์
+y_pred = best_model.predict(X_test)
+
+# 📊 กราฟเปรียบเทียบค่าจริงกับค่าพยากรณ์
+plt.figure(figsize=(10,5))
+plt.plot(y_test.values[:100], label='Actual Values')
+plt.plot(y_pred[:100], label='Predicted Values')
+plt.xlabel('Sample Index')
+plt.ylabel('Kp Index')
+plt.title('Comparison of Actual and Predicted Values')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# 📈 กราฟการกระจาย
+plt.figure(figsize=(6,6))
+plt.scatter(y_test, y_pred)
+plt.xlabel('Actual Values (y_test)')
+plt.ylabel('Predicted Values (y_pred)')
+plt.title('Scatter Plot of Actual vs Predicted')
+plt.grid(True)
+plt.show()
+
+# ✅ แสดงผล Kp จริง กับ Kp ที่พยากรณ์ได้
+print("\nเปรียบเทียบ Kp จริง กับ Kp ที่พยากรณ์ได้ (ตัวอย่างบางส่วน):")
+for actual, predicted in zip(y_test.values[:20], y_pred[:20]):
+    print(f"Actual Kp: {actual:.2f}  |  Predicted Kp: {predicted:.2f}")
+
+# 📏 ค่าความแม่นยำ
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print("\n📐 Mean Squared Error (MSE):", mse)
+print("📊 R² Score:", r2)
+
+# 💾 บันทึกโมเดล
+joblib.dump(best_model, 'solar_wind_predictor_model.pkl')
+print("\n✅ โมเดลที่ดีที่สุดถูกบันทึกเรียบร้อยแล้ว!")
+
+# 🔎 การพยากรณ์ใหม่
+new_data = pd.DataFrame([[-5, 350, 8]], columns=['Bz', 'Speed', 'Density'])
+new_data['Speed_Density_Ratio'] = new_data['Speed'] / (new_data['Density'] + 1e-6)
+new_data['Bz_Squared'] = new_data['Bz'] ** 2
+new_data['Energy_Flux'] = (new_data['Speed'] ** 2) * new_data['Density']
+
+loaded_model = joblib.load('solar_wind_predictor_model.pkl')
+prediction = loaded_model.predict(new_data)
+
+print("\n🔮 ค่าพยากรณ์ Kp สำหรับข้อมูลใหม่:", prediction)
+
+streamlit
+pandas
+scikit-learn
+joblib
